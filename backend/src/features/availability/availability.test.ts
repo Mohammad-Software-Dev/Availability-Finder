@@ -3,14 +3,17 @@ import { people } from "../../data/seed.js";
 import { AppError } from "../../shared/errors/AppError.js";
 import { errorHandler } from "../../shared/errors/errorHandler.js";
 import { handleGetAvailability } from "./availability.controller.js";
+import { availabilityRequestSchema } from "./availability.schemas.js";
 import { getAvailability } from "./availability.service.js";
 
 describe("getAvailability", () => {
   it("returns deterministic slots for Alice + Bob with defaults", () => {
-    const result = getAvailability({
-      personIds: ["alice", "bob"],
-      durationMinutes: 30,
-    });
+    const result = getAvailability(
+      availabilityRequestSchema.parse({
+        personIds: ["alice", "bob"],
+        durationMinutes: 30,
+      }),
+    );
 
     expect(result.durationMinutes).toBe(30);
     expect(result.stepMinutes).toBe(15);
@@ -33,11 +36,24 @@ describe("getAvailability", () => {
     );
   });
 
+  it("preserves requested attendee order in the response", () => {
+    const result = getAvailability(
+      availabilityRequestSchema.parse({
+        personIds: ["bob", "alice"],
+        durationMinutes: 30,
+      }),
+    );
+
+    expect(result.attendees).toEqual(["bob", "alice"]);
+  });
+
   it("returns exactly one 60-minute slot when everyone is selected", () => {
-    const result = getAvailability({
-      personIds: ["alice", "bob", "charlie", "diana", "edward", "fatima"],
-      durationMinutes: 60,
-    });
+    const result = getAvailability(
+      availabilityRequestSchema.parse({
+        personIds: ["alice", "bob", "charlie", "diana", "edward", "fatima"],
+        durationMinutes: 60,
+      }),
+    );
 
     expect(result.commonWorkingWindow).toEqual({ start: "11:00", end: "16:00" });
     expect(result.slots).toEqual([{ start: "13:00", end: "14:00" }]);
@@ -45,23 +61,14 @@ describe("getAvailability", () => {
 
   it("rejects unknown users instead of computing partial availability", () => {
     expect(() =>
-      getAvailability({
-        personIds: ["alice", "ghost-user"],
-        durationMinutes: 30,
-      }),
+      getAvailability(
+        availabilityRequestSchema.parse({
+          personIds: ["alice", "ghost-user"],
+          durationMinutes: 30,
+        }),
+      ),
     ).toThrowError(
       new AppError("Unknown participant id: ghost-user", 400),
-    );
-  });
-
-  it("rejects duplicate participant ids with a clean error", () => {
-    expect(() =>
-      getAvailability({
-        personIds: ["alice", "alice"],
-        durationMinutes: 30,
-      }),
-    ).toThrowError(
-      new AppError("Duplicate participant id not allowed: alice", 400),
     );
   });
 
@@ -80,10 +87,12 @@ describe("getAvailability", () => {
     );
 
     try {
-      const result = getAvailability({
-        personIds: ["test-early", "test-late"],
-        durationMinutes: 30,
-      });
+      const result = getAvailability(
+        availabilityRequestSchema.parse({
+          personIds: ["test-early", "test-late"],
+          durationMinutes: 30,
+        }),
+      );
 
       expect(result.commonWorkingWindow).toBeNull();
       expect(result.slots).toEqual([]);
@@ -98,6 +107,63 @@ describe("getAvailability", () => {
         1,
       );
     }
+  });
+
+  it("uses the schema default for step minutes before calling the service", () => {
+    const input = availabilityRequestSchema.parse({
+      personIds: ["alice", "bob"],
+      durationMinutes: 30,
+    });
+
+    expect(input.stepMinutes).toBe(15);
+    expect(getAvailability(input).stepMinutes).toBe(15);
+  });
+
+  it("uses an explicit step value from parsed input", () => {
+    const input = availabilityRequestSchema.parse({
+      personIds: ["alice", "bob"],
+      durationMinutes: 30,
+      stepMinutes: 20,
+    });
+
+    expect(getAvailability(input).stepMinutes).toBe(20);
+  });
+
+  it("rejects duplicate participant ids at the validation boundary", () => {
+    expect(() =>
+      availabilityRequestSchema.parse({
+        personIds: ["alice", "alice"],
+        durationMinutes: 30,
+      }),
+    ).toThrowError();
+  });
+
+  it("rejects whitespace-only participant ids at the validation boundary", () => {
+    expect(() =>
+      availabilityRequestSchema.parse({
+        personIds: ["   "],
+        durationMinutes: 30,
+      }),
+    ).toThrowError();
+  });
+
+  it("rejects invalid step minutes at the validation boundary", () => {
+    expect(() =>
+      availabilityRequestSchema.parse({
+        personIds: ["alice"],
+        durationMinutes: 30,
+        stepMinutes: 0,
+      }),
+    ).toThrowError();
+  });
+
+  it("rejects invalid duration at the validation boundary", () => {
+    expect(() =>
+      availabilityRequestSchema.parse({
+        personIds: ["alice"],
+        durationMinutes: 0,
+      }),
+    ).toThrowError();
   });
 });
 
@@ -317,6 +383,75 @@ describe("error handler", () => {
       expect.objectContaining({
         message: "Invalid request",
         error: "Person id cannot be empty",
+      }),
+    );
+  });
+
+  it("returns 400 for invalid duration", () => {
+    let statusCode = 0;
+    let jsonBody: unknown;
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(payload: unknown) {
+        jsonBody = payload;
+        return this;
+      },
+    } as any;
+
+    handleGetAvailability(
+      {
+        body: {
+          personIds: ["alice"],
+          durationMinutes: 0,
+        },
+      } as any,
+      res,
+      (error: unknown) => errorHandler(error as any, {} as any, res, vi.fn()),
+    );
+
+    expect(statusCode).toBe(400);
+    expect(jsonBody).toEqual(
+      expect.objectContaining({
+        message: "Invalid request",
+        error: "Meeting duration must be greater than zero",
+      }),
+    );
+  });
+
+  it("returns 400 for invalid step minutes", () => {
+    let statusCode = 0;
+    let jsonBody: unknown;
+    const res = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(payload: unknown) {
+        jsonBody = payload;
+        return this;
+      },
+    } as any;
+
+    handleGetAvailability(
+      {
+        body: {
+          personIds: ["alice"],
+          durationMinutes: 30,
+          stepMinutes: 0,
+        },
+      } as any,
+      res,
+      (error: unknown) => errorHandler(error as any, {} as any, res, vi.fn()),
+    );
+
+    expect(statusCode).toBe(400);
+    expect(jsonBody).toEqual(
+      expect.objectContaining({
+        message: "Invalid request",
+        error: "Step must be greater than zero",
       }),
     );
   });

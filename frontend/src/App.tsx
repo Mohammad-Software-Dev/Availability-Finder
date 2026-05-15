@@ -65,7 +65,9 @@ function App() {
     setLastSubmittedRequest(payload);
 
     try {
-      const data = await fetchAvailability(payload, { signal: controller.signal });
+      const data = await fetchAvailability(payload, {
+        signal: controller.signal,
+      });
 
       if (requestId !== availabilityRequestIdRef.current) {
         return;
@@ -74,7 +76,10 @@ function App() {
       setAvailability(data);
       setAvailabilityStatus("success");
     } catch (err) {
-      if (controller.signal.aborted || requestId !== availabilityRequestIdRef.current) {
+      if (
+        controller.signal.aborted ||
+        requestId !== availabilityRequestIdRef.current
+      ) {
         return;
       }
 
